@@ -36,16 +36,16 @@ def run_evaluation():
         "What is the definition of the photoelectric effect?",
         "What is the stopping potential and what happens to the current when it is reached?",
         "State Einstein's photoelectric equation and define the variables.",
-        # "How does increasing the intensity of radiation affect the photocurrent according to quantum mechanics?",
-        # "What properties can be derived from the linear graph plot of stopping potential versus frequency?"
+        "How does increasing the intensity of radiation affect the photocurrent according to quantum mechanics?",
+        "What properties can be derived from the linear graph plot of stopping potential versus frequency?"
     ]
     
     ground_truths = [
         "The photoelectric effect is the process of emitting electrons from a metal surface when the surface is exposed to electromagnetic radiation of a sufficiently high frequency.",
         "Stopping potential is the value of the retarding voltage V when even the most energetic electron is not allowed to reach the cathode, causing the current to drop to zero.",
         "The equation is E = h*v = h*v_0 + T_max, where E is the total energy of the incident photon, v is the frequency of incident radiation, v_0 is the threshold frequency of the metal, and T_max is the maximum kinetic energy of the ejected electron.",
-        # "In quantum mechanics, increasing intensity increases the number of photons falling per second per unit area. This leads to an increased number of collisions with electrons and their subsequent ejection, which directly increases the photocurrent.",
-        # "When plotting stopping potential versus frequency, the intercept on the X-axis gives the threshold frequency, and the slope of the curve provides the value of h/e."
+        "In quantum mechanics, increasing intensity increases the number of photons falling per second per unit area. This leads to an increased number of collisions with electrons and their subsequent ejection, which directly increases the photocurrent.",
+        "When plotting stopping potential versus frequency, the intercept on the X-axis gives the threshold frequency, and the slope of the curve provides the value of h/e."
     ]
     
     # 3. Initialize your agent with the specific target PDF
