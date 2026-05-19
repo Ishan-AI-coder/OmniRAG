@@ -1,0 +1,32 @@
+[project]
+name = "langgraph-tutorial"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "datasets>=4.8.5",
+    "fastembed>=0.8.0",
+    "jupyter>=1.1.1",
+    "langchain>=0.3.0",
+    "langchain-chroma>=1.1.0",
+    "langchain-cohere>=0.5.1",
+    "langchain-community>=0.4.1",
+    "langchain-core>=0.3.0",
+    "langchain-google-genai>=4.2.1",
+    "langchain-openai>=1.1.6",
+    "langchain-qdrant>=1.1.0",
+    "langchain-text-splitters>=0.3.0",
+    "langgraph>=1.0.5",
+    "notebook>=7.5.1",
+    "onnxruntime==1.19.2",
+    "pillow>=12.2.0",
+    "protobuf==3.20.3",
+    "pymupdf>=1.27.2.3",
+    "pypdf>=6.11.0",
+    "python-dotenv>=1.2.1",
+    "qdrant-client>=1.18.0",
+    "ragas>=0.4.3",
+    "rank-bm25>=0.2.2",
+    "streamlit>=1.57.0",
+]
