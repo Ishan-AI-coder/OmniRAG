@@ -14,9 +14,8 @@ First, clone the repository and initialize your virtual environment to isolate t
 ```bash
 git clone [https://github.com/yourusername/multimodal-rag.git](https://github.com/yourusername/multimodal-rag.git)
 cd multimodal-rag
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv init
+uv sync
 ```
 
 ### 2. API Configuration
