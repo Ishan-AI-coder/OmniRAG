@@ -5,7 +5,6 @@ import random
 import concurrent.futures
 from dotenv import load_dotenv
 from typing import TypedDict, Annotated, Sequence
-from operator import add as add_messages
 import fitz  # PyMuPDF
 import io
 import base64
@@ -19,6 +18,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.tools import StructuredTool
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
+from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 
 # Hybrid & Reranking Imports
@@ -29,7 +29,6 @@ from langchain_cohere import CohereRerank
 
 load_dotenv(override=True)
 
-# Prevent FastEmbed caching errors on Linux/WSL
 os.environ["FASTEMBED_CACHE_PATH"] = "./model_cache"
 
 def extract_multimodal_documents_fast(pdf_path: str, doc_name: str, llm, progress_callback=None):
@@ -38,7 +37,6 @@ def extract_multimodal_documents_fast(pdf_path: str, doc_name: str, llm, progres
     processed_docs = []
     images_to_process = []
     
-    # --- PASS 1: Fast Text Extraction ---
     for page_num in range(total_pages):
         page = doc[page_num]
         text = page.get_text()
@@ -64,7 +62,7 @@ def extract_multimodal_documents_fast(pdf_path: str, doc_name: str, llm, progres
             progress = (page_num / total_pages) * 0.20
             progress_callback(progress, f"[{doc_name}] Extracting text: Page {page_num + 1}...")
 
-    # --- PASS 2: Parallel Image Captioning (with Rate Limit Protection) ---
+    # ---  Parallel Image Captioning  ---
     total_images = len(images_to_process)
     if total_images > 0:
         def caption_single_image(img_data):
@@ -114,20 +112,20 @@ def create_multi_document_agent(pdf_data: list[dict], progress_callback=None):
     # 1. Initialize Models
     dense_embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     sparse_embeddings = FastEmbedSparse(model_name="prithivida/Splade_PP_en_v1")
-    cohere_reranker = CohereRerank(model="rerank-english-v3.0", top_n=4)
+    cohere_reranker = CohereRerank(model="rerank-english-v3.0", top_n=5)
     
     tools = []
     
     for doc_idx, doc_info in enumerate(pdf_data):
         pdf_path, doc_name = doc_info["path"], doc_info["name"]
         
-        # 2. Ingestion
+        # Ingestion
         raw_documents = extract_multimodal_documents_fast(pdf_path, doc_name, llm, progress_callback)
         
         if progress_callback:
             progress_callback(1.0, f"[{doc_name}] Building Hybrid Index & Reranker...")
 
-        # 3. Chunking
+        #  Chunking
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
         final_chunks = []
         for doc in raw_documents:
@@ -136,7 +134,7 @@ def create_multi_document_agent(pdf_data: list[dict], progress_callback=None):
             else:
                 final_chunks.append(doc)
 
-        # 4. Qdrant Native Hybrid Search (Base Retriever)
+        #  Qdrant Native Hybrid Search (Base Retriever)
         safe_name = re.sub(r'[^a-zA-Z0-9]', '_', doc_name)
         qdrant_store = QdrantVectorStore.from_documents(
             documents=final_chunks,
@@ -147,36 +145,32 @@ def create_multi_document_agent(pdf_data: list[dict], progress_callback=None):
             retrieval_mode=RetrievalMode.HYBRID
         )
         
-        # Pull top 15 for Cohere to judge
         base_hybrid_retriever = qdrant_store.as_retriever(search_kwargs={"k": 15})
 
-        # 5. Create the Tool (MANUAL RERANKING - NO WRAPPER NEEDED!)
+        # Creating the Reciprocal Rank Fusion tool
         def create_search_func(retriever, reranker, n):
             def search_doc(query: str) -> str:
-                # Step A: Get 15 chunks from Qdrant
                 raw_docs = retriever.invoke(query) 
                 
                 if not raw_docs:
                     return f"I found no relevant information in {n}."
                 
-                # Step B: Manually force Cohere to rerank them (Bypassing the broken retrievers module!)
                 best_docs = reranker.compress_documents(documents=raw_docs, query=query)
                 
                 if not best_docs:
                     return f"No highly relevant information found in {n} after reranking."
                 
-                # Step C: Format for the LLM
                 return "\n\n".join([f"--- Excerpt from {d.metadata.get('source', 'Unknown')} ---\n{d.page_content}" for d in best_docs])
             return search_doc
 
-        # Bind the base retriever and the cohere model directly to the tool
+        # Binding the base retriever and the cohere model directly to the tool
         tools.append(StructuredTool.from_function(
             func=create_search_func(base_hybrid_retriever, cohere_reranker, doc_name),
             name=f"search_{safe_name}",
             description=f"Search '{doc_name}' for keywords, data, and visual chart summaries. Input a specific query."
         ))
 
-    # 7. LangGraph Agent Setup
+    # LangGraph Agent Setup
     llm_with_tools = llm.bind_tools(tools)
     class AgentState(TypedDict):
         messages: Annotated[Sequence[BaseMessage], add_messages]
