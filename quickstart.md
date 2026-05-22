@@ -32,7 +32,7 @@ FASTEMBED_CACHE_PATH=./model_cache
 ```
 > **Note:** Setting the `FASTEMBED_CACHE_PATH` is a good practice. It ensures your local embedding models download directly into your project folder rather than clogging up your hidden system drives.
 
-### 3. Windows / WSL Memory Fix (CRITICAL)
+### 3. Windows / WSL Memory Fix (OPTIONAL)
 If you are running this via WSL (Windows Subsystem for Linux), the local Qdrant and FastEmbed models will aggressively consume RAM during embedding generation. This will cause the Linux kernel to deploy an Out-Of-Memory (OOM) sniper, throwing a `Killed` crash. **You must throttle Linux memory.**
 
 1. Open a standard Windows Command Prompt (not your WSL terminal).

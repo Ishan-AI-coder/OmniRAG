@@ -2,13 +2,17 @@ import os
 import re
 import time
 import random
+import io
+import base64
 import concurrent.futures
 from dotenv import load_dotenv
 from typing import TypedDict, Annotated, Sequence
+from operator import add as add_messages
+
 import fitz  # PyMuPDF
-import io
-import base64
 from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
 
 # Langchain & AI Imports
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
@@ -18,7 +22,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.tools import StructuredTool
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 
 # Hybrid & Reranking Imports
@@ -26,17 +29,62 @@ from langchain_qdrant import QdrantVectorStore, RetrievalMode, FastEmbedSparse
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_cohere import CohereRerank
 
-
 load_dotenv(override=True)
 
+# Prevent FastEmbed caching errors on Linux/WSL
 os.environ["FASTEMBED_CACHE_PATH"] = "./model_cache"
 
+def execute_python_plot_tool(python_code: str) -> str:
+    """
+    Use this tool when the user asks for a chart, graph, or plot.
+    Input MUST be a valid, complete Python script using matplotlib.pyplot (as plt) or numpy (as np).
+    The code must define the data arrays directly based on the context.
+    DO NOT include plt.show(). DO NOT wrap in markdown backticks.
+    """
+    try:
+        
+        clean_code = python_code.replace("```python", "").replace("```", "").strip()
+        plt.clf()
+        plt.close('all')
+
+        local_vars = {"plt": plt, "np": np}
+        safe_globals = {"__builtins__": __builtins__}
+
+        exec(clean_code, safe_globals, local_vars)
+
+        buf = io.BytesIO()
+        
+        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        plt.close('all')
+        
+        buf.seek(0)
+        
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        buf.close()
+
+        print("[Python Tool] Success! Plot generated in memory.")
+        
+        return f"Successfully generated plot. [PLOT_BASE64:{img_base64}] Tell the user the diagram is displayed."
+
+    except Exception as e:
+        print(f"❌ [Python Tool Error]: {str(e)}")
+        return f"Error executing plot code: {str(e)}. Please correct your Python code and try again."
+
+python_plotter = StructuredTool.from_function(
+    func=execute_python_plot_tool,
+    name="generate_python_plot",
+    description="Executes Python code to generate a matplotlib graph. Input must be raw, executable Python code containing data arrays extracted from the documents."
+)
+
+
+# --- MULTIMODAL EXTRACTION ---
 def extract_multimodal_documents_fast(pdf_path: str, doc_name: str, llm, progress_callback=None):
     doc = fitz.open(pdf_path)
     total_pages = len(doc)
     processed_docs = []
     images_to_process = []
-    
+
+
     for page_num in range(total_pages):
         page = doc[page_num]
         text = page.get_text()
@@ -62,7 +110,7 @@ def extract_multimodal_documents_fast(pdf_path: str, doc_name: str, llm, progres
             progress = (page_num / total_pages) * 0.20
             progress_callback(progress, f"[{doc_name}] Extracting text: Page {page_num + 1}...")
 
-    # ---  Parallel Image Captioning  ---
+
     total_images = len(images_to_process)
     if total_images > 0:
         def caption_single_image(img_data):
@@ -106,26 +154,24 @@ def extract_multimodal_documents_fast(pdf_path: str, doc_name: str, llm, progres
     return processed_docs
 
 
+# --- LANGGRAPH AGENT SETUP ---
 def create_multi_document_agent(pdf_data: list[dict], progress_callback=None):
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    # 1. Initialize Models
     dense_embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     sparse_embeddings = FastEmbedSparse(model_name="prithivida/Splade_PP_en_v1")
-    cohere_reranker = CohereRerank(model="rerank-english-v3.0", top_n=5)
+    cohere_reranker = CohereRerank(model="rerank-english-v3.0", top_n=6)
     
-    tools = []
+    tools = [python_plotter]
     
     for doc_idx, doc_info in enumerate(pdf_data):
         pdf_path, doc_name = doc_info["path"], doc_info["name"]
         
-        # Ingestion
         raw_documents = extract_multimodal_documents_fast(pdf_path, doc_name, llm, progress_callback)
         
         if progress_callback:
             progress_callback(1.0, f"[{doc_name}] Building Hybrid Index & Reranker...")
 
-        #  Chunking
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
         final_chunks = []
         for doc in raw_documents:
@@ -134,51 +180,53 @@ def create_multi_document_agent(pdf_data: list[dict], progress_callback=None):
             else:
                 final_chunks.append(doc)
 
-        #  Qdrant Native Hybrid Search (Base Retriever)
         safe_name = re.sub(r'[^a-zA-Z0-9]', '_', doc_name)
         qdrant_store = QdrantVectorStore.from_documents(
             documents=final_chunks,
             embedding=dense_embeddings,
             sparse_embedding=sparse_embeddings,
-            location=":memory:",
+            path="./qdrant_db",
             collection_name=f"hybrid_{safe_name}_{doc_idx}",
             retrieval_mode=RetrievalMode.HYBRID
         )
         
         base_hybrid_retriever = qdrant_store.as_retriever(search_kwargs={"k": 15})
 
-        # Creating the Reciprocal Rank Fusion tool
         def create_search_func(retriever, reranker, n):
             def search_doc(query: str) -> str:
                 raw_docs = retriever.invoke(query) 
-                
                 if not raw_docs:
                     return f"I found no relevant information in {n}."
                 
                 best_docs = reranker.compress_documents(documents=raw_docs, query=query)
-                
                 if not best_docs:
                     return f"No highly relevant information found in {n} after reranking."
                 
                 return "\n\n".join([f"--- Excerpt from {d.metadata.get('source', 'Unknown')} ---\n{d.page_content}" for d in best_docs])
             return search_doc
 
-        # Binding the base retriever and the cohere model directly to the tool
         tools.append(StructuredTool.from_function(
             func=create_search_func(base_hybrid_retriever, cohere_reranker, doc_name),
             name=f"search_{safe_name}",
-            description=f"Search '{doc_name}' for keywords, data, and visual chart summaries. Input a specific query."
+            description=f"Search '{doc_name}' for keywords and data. Do NOT use this to generate diagrams; only use it to retrieve existing information."
         ))
 
-    # LangGraph Agent Setup
     llm_with_tools = llm.bind_tools(tools)
     class AgentState(TypedDict):
         messages: Annotated[Sequence[BaseMessage], add_messages]
 
     system_prompt = f"""
         You are an advanced AI research assistant analyzing multiple research papers visually and textually.
-        You have {len(tools)} highly advanced search tools available.
-        Base answers strictly on retrieved context. Explicitly cite the document and page number.
+        You have {len(tools)} highly advanced search and execution tools available.
+        
+        When a user asks for a chart, graph, or visualization:
+        1. Search the documents to find the relevant numerical data.
+        2. Use the 'generate_python_plot' tool.
+        3. Pass fully written, executable Python code to the tool. 
+        4. Hardcode the extracted data into arrays (e.g., x = [1, 2, 3]). 
+        5. Use 'plt' (matplotlib.pyplot) to plot and style it professionally. DO NOT use plt.show().
+
+        Base all answers and data strictly on retrieved context. Explicitly cite the document and page number.
     """
 
     def call_llm(state: AgentState) -> AgentState:
